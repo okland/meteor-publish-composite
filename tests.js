@@ -107,7 +107,8 @@ if (Meteor.isServer) {
 			{ 
 			find: function(post) {
 				return Comments.find({postId: post._id});
-			}
+
+			},
 			}
 		]
 	};
@@ -118,18 +119,140 @@ if (Meteor.isServer) {
 		find: function() {
             		return Posts.find({author: username});
         	},
-		attachParent: true,
        		 children: [
 			{ 
 			find: function(post) {
 				return Comments.find({postId: post._id});
-			}
+			},
+			attachParent: true
+
 			}
 		]
 	};
     });
     
     /*** End Helpers for parentIds feature ***/
+Meteor.publishComposite('postsAsArticles', {
+        collectionName: 'articles',
+        find: function() {
+            return Posts.find();
+        }
+    });
+
+    Meteor.publishComposite('pubWithChildThatReturnsNullIfAuthorIsMarie', {
+        find: function() {
+            return Posts.find();
+        },
+        children: [
+            {
+                find: function(post) {
+                    if (post.author === 'marie') {
+                        return null;
+                    }
+
+                    return Comments.find({ postId: post._id });
+                }
+            }
+        ]
+    });
+
+    Meteor.publishComposite('publishCommentAuthorsInAltClientCollection', {
+        find: function() {
+            return Posts.find();
+        },
+        children: [
+            {
+                find: function(post) {
+                    return Authors.find({ username: post.author });
+                }
+            },
+            {
+                find: function(post) {
+                    return Comments.find({ postId: post._id });
+                },
+                children: [
+                    {
+                        collectionName: 'commentAuthors',
+                        find: function(comment) {
+                            return Authors.find({ username: comment.author });
+                        }
+                    }
+                ]
+            }
+        ]
+    });
+
+    Meteor.publishComposite('twoUsersPosts', function(username1, username2) {
+        return [
+            {
+                find: function() {
+                    return Posts.find({ author: username1 });
+                },
+                children: postPublicationChildren
+            },
+            {
+                find: function() {
+                    return Posts.find({ author: username2 });
+                },
+                children: postPublicationChildren
+            }
+        ];
+    });
+
+    Meteor.publishComposite('twoFixedAuthors', [
+        {
+            find: function() {
+                return Authors.find({ username: 'marie' });
+            }
+        },
+        {
+            find: function() {
+                return Authors.find({ username: 'albert' });
+            }
+        }
+    ]);
+
+    Meteor.publishComposite('returnNothing', function() {
+    });
+}
+
+
+if (Meteor.isClient) {
+    Articles = new Meteor.Collection('articles');
+    CommentAuthors = new Meteor.Collection('commentAuthors');
+}
+
+
+/**
+ * Define test helper
+ */
+var testPublication = function(testName, options) {
+    options.args = options.args || [];
+
+    Tinytest.addAsync(testName, function(assert, onComplete) {
+        var subscription;
+        var args = [ options.publication ].concat(options.args);
+
+        args.push(function onSubscriptionReady() {
+            Meteor.call('log', 'Sub ready, starting test', function() {
+                options.testHandler(assert, function() {
+                    Meteor.call('log', 'stopping sub', function() {
+                        subscription.stop();
+                        Meteor.call('log', 'test complete', function() {
+                            onComplete();
+                        });
+                    });
+                }, subscription);
+            });
+        });
+
+        Meteor.call('initTestData');
+
+        Meteor.call('log', '** ' + testName + ': Subscribing', function() {
+            subscription = Meteor.subscribe.apply(Meteor, args);
+        });
+    });
+};
 
 if (Meteor.isClient) {
     testPublication('Should publish all posts', {
@@ -338,17 +461,17 @@ if (Meteor.isClient) {
             var albertsPost = Posts.findOne({ title: 'Post with one comment' });
             var comment = Comments.findOne({ postId: albertsPost._id, author: 'richard' });
 
-            assert.equal(albertsPost.parentIds, null, 'Albert post should not contain parent ids');
-            assert.equal(comment.parentIds, null, 'Albert post comment should not contain parent ids');
+            assert.isTrue(typeof albertsPost.parentsIds == 'undefined', 'Albert post should not contain parent ids');
+            assert.isTrue(typeof comment.parentsIds == 'undefined', 'Albert post comment should not contain parent ids');
 
             Meteor.call('updateCommentAuthor', comment._id, 'john', function(err) {
                 assert.isUndefined(err);
 
 		albertsPost = Posts.findOne({ title: 'Post with one comment' });
-            	comment = Comments.findOne({ postId: albertsPost._id, author: 'richard' });
+            	comment = Comments.findOne({ postId: albertsPost._id, author: 'john' });
 
-           	 assert.equal(albertsPost.parentIds, null, 'After change - Albert post should not contain parent ids');
-           	 assert.equal(comment.parentIds, null, 'After change -Albert post comment should not contain parent ids');
+           	 assert.isTrue(typeof albertsPost.parentsIds == 'undefined', 'After change - Albert post should not contain parent ids');
+           	 assert.isTrue(typeof comment.parentsIds == 'undefined', 'After change -Albert post comment should not contain parent ids');
                 onComplete();
             });
         }
@@ -362,18 +485,19 @@ if (Meteor.isClient) {
             var albertsPost = Posts.findOne({ title: 'Post with one comment' });
             var comment = Comments.findOne({ postId: albertsPost._id, author: 'richard' });
 
-            assert.equal(albertsPost.parentIds, null, 'Albert post should not contain parent ids');
-            assert.equal(comment.parentIds, [albertsPost._id], 'Albert post comment should contain postId in parent ids');
+            assert.isTrue(typeof albertsPost.parentIds == 'undefined', 'Albert post should not contain parent ids');
+            assert.isTrue(comment.parentsIds && comment.parentsIds[0]._str == albertsPost._id._str, 'Albert post comment should contain postId in parent ids');
 
             Meteor.call('updateCommentAuthor', comment._id, 'john', function(err) {
                 assert.isUndefined(err);
 
 		albertsPost = Posts.findOne({ title: 'Post with one comment' });
-            	comment = Comments.findOne({ postId: albertsPost._id, author: 'richard' });
+            	comment = Comments.findOne({ postId: albertsPost._id, author: 'john' });
 
-           	 assert.equal(albertsPost.parentIds, null, 'After change - Albert post should not contain parent ids');
-           	 assert.equal(comment.parentIds, [albertsPost._id], 'After change -Albert post comment should contain postId in parent ids');
+           	 assert.isTrue( typeof albertsPost.parentsIds == 'undefined', 'After change - Albert post should not contain parent ids');
+           	 assert.isTrue(comment.parentsIds && comment.parentsIds[0]._str == albertsPost._id._str, 'After change -Albert post comment should contain postId in parent ids');
                 onComplete();
+
             });
         }
     });
